@@ -39,8 +39,8 @@ export default function Step1() {
     // Salvar no Zustand
     setTargetWallet(targetWallet);
 
-    // Ir para Step 2
-    router.push("/trade/create/step2");
+    // Ir para Step 3 (pulando Step 2)
+    router.push("/trade/create/step3");
   }
 
   return (

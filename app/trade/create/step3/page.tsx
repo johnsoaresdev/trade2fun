@@ -6,22 +6,14 @@ import { Button } from "@/components/ui/button";
 import { useTradeStore } from "@/store/tradeStore";
 import { useRouter } from "next/navigation";
 
-const DEFAULT_RPC = process.env.NEXT_PUBLIC_SUI_RPC || "https://fullnode.mainnet.sui.io:443";
+import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
+
+const client = new SuiClient({ url: getFullnodeUrl("mainnet") });
 
 async function fetchOwnedObjectsRPC(owner: string) {
   try {
-    const res = await fetch(DEFAULT_RPC, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "sui_getOwnedObjects",
-        params: [owner, { options: { showType: true, showDisplay: true, showContent: true } }],
-      }),
-    });
-    const data = await res.json();
-    return data.result?.data || data.result || [];
+    const res = await client.getOwnedObjects({ owner: owner, options:{ showContent:true, showType:true, showDisplay:true } });
+    return res?.data||[];
   } catch (e) {
     console.error("RPC error", e);
     return [];
@@ -50,12 +42,12 @@ export default function Step3() {
         const items = (objs || []).map((o: any) => {
           const data = o.data || o;
           const objId = data?.objectId || data?.reference?.objectId || data?.id?.objectId || data?.objectId;
-          const content = data?.content?.data || data?.content || (data?.data && data.data.content);
-          const display = (content && content.display) || data?.display || {};
+          const content = data?.content || (data?.data && data.data.content);
+          const display = data?.display?.data || {};
           const type = content?.type || data?.type || "";
-          const name = (display && display.name) || (type ? type.split("::").pop() : objId);
-          const collection = (display && display.collection) || (type ? type.split("::").slice(0,2).join("::") : "");
-          const image = (display && (display.url || display.image)) || "https://via.placeholder.com/80";
+          const name = display?.name || (type ? type.split("::").pop() : objId);
+          const collection = display?.collection || (type ? type.split("::").slice(0,2).join("::") : "");
+          const image = display?.image_url || display?.image || display?.url || "https://via.placeholder.com/80";
           return { id: objId, name, collection, image, raw: o };
         }).filter(Boolean);
         setTargetNFTs(items);
