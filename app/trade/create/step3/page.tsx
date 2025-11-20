@@ -5,15 +5,17 @@ import { StepHeader } from "@/components/trade/StepHeader";
 import { Button } from "@/components/ui/button";
 import { useTradeStore } from "@/store/tradeStore";
 import { useRouter } from "next/navigation";
-
 import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 
 const client = new SuiClient({ url: getFullnodeUrl("mainnet") });
 
 async function fetchOwnedObjectsRPC(owner: string) {
   try {
-    const res = await client.getOwnedObjects({ owner: owner, options:{ showContent:true, showType:true, showDisplay:true } });
-    return res?.data||[];
+    const res = await client.getOwnedObjects({
+      owner,
+      options: { showContent: true, showType: true, showDisplay: true },
+    });
+    return res?.data || [];
   } catch (e) {
     console.error("RPC error", e);
     return [];
@@ -23,55 +25,88 @@ async function fetchOwnedObjectsRPC(owner: string) {
 export default function Step3() {
   const router = useRouter();
 
-  // Zustand actions
   const addRequestNFT = useTradeStore((s: any) => s.addRequestNFT);
   const addRequestToken = useTradeStore((s: any) => s.addRequestToken);
   const targetWallet = useTradeStore((s: any) => s.targetWallet);
 
   const [tab, setTab] = useState<"nft" | "token">("nft");
-  const [targetNFTs, setTargetNFTs] = useState<any[]>([]);
+  const [groupedNFTs, setGroupedNFTs] = useState<any>({});
   const [selectedNFTIds, setSelectedNFTIds] = useState<string[]>([]);
   const [tokenType, setTokenType] = useState("SUI");
   const [tokenAmount, setTokenAmount] = useState("");
 
   useEffect(() => {
-    async function fetchTargetNFTs() {
-      if (!targetWallet) return;
-      try {
-        const objs = await fetchOwnedObjectsRPC(targetWallet);
-        const items = (objs || []).map((o: any) => {
-          const data = o.data || o;
-          const objId = data?.objectId || data?.reference?.objectId || data?.id?.objectId || data?.objectId;
-          const content = data?.content || (data?.data && data.data.content);
-          const display = data?.display?.data || {};
-          const type = content?.type || data?.type || "";
-          const name = display?.name || (type ? type.split("::").pop() : objId);
-          const collection = display?.collection || (type ? type.split("::").slice(0,2).join("::") : "");
-          const image = display?.image_url || display?.image || display?.url || "https://via.placeholder.com/80";
-          return { id: objId, name, collection, image, raw: o };
-        }).filter(Boolean);
-        setTargetNFTs(items);
-      } catch (e) {
-        console.error("Error fetching target NFTs:", e);
-      }
-    }
-    fetchTargetNFTs();
+async function load() {
+  if (!targetWallet) return;
+
+  const objs = await fetchOwnedObjectsRPC(targetWallet);
+
+  // 1. Encontre o KioskOwnerCap
+  const kioskCaps = objs
+    .map((o) => o.data)
+    .filter((d) => d?.type?.includes("KioskOwnerCap"));
+
+  if (kioskCaps.length === 0) {
+    setGroupedNFTs({});
+    return;
+  }
+
+  // kioskId = onde as NFTs realmente ficam
+  const kioskId = kioskCaps[0].fields.for;
+
+  // 2. Listar todos os itens dentro do kiosk
+  const dynamicFields = await client.getDynamicFields({ parentId: kioskId });
+
+  const nftList: any[] = [];
+
+  for (const field of dynamicFields.data) {
+    const obj = await client.getObject({
+      id: field.objectId,
+      options: { showContent: true, showDisplay: true }
+    });
+
+    const disp = obj.data?.display?.data || {};
+    const type = obj.data?.content?.type || "";
+
+    // ignorar coins
+    if (type.startsWith("0x2::coin")) continue;
+
+    nftList.push({
+      id: field.objectId,
+      name: disp.name || type.split("::").pop(),
+      image:
+        disp.image_url ||
+        disp.image ||
+        "https://placehold.co/200x200?text=NFT",
+      collection: disp.collection || type.split("::")[1]
+    });
+  }
+
+  // 3. Agrupar por coleção
+  const grouped: any = {};
+  for (const nft of nftList) {
+    if (!grouped[nft.collection]) grouped[nft.collection] = [];
+    grouped[nft.collection].push(nft);
+  }
+
+  setGroupedNFTs(grouped);
+}
+
+
+    load();
   }, [targetWallet]);
 
   function toggleNFT(nft: any) {
-    const alreadySelected = selectedNFTIds.includes(nft.id);
-
-    if (alreadySelected) {
+    if (selectedNFTIds.includes(nft.id)) {
       setSelectedNFTIds(selectedNFTIds.filter((id) => id !== nft.id));
     } else {
       setSelectedNFTIds([...selectedNFTIds, nft.id]);
-      addRequestNFT(nft); // salva no global store
+      addRequestNFT(nft);
     }
   }
 
   function addToken() {
     if (!tokenAmount) return;
-
     addRequestToken({ type: tokenType, amount: Number(tokenAmount) });
     setTokenAmount("");
   }
@@ -81,66 +116,123 @@ export default function Step3() {
       <StepHeader step={3} title="What do you want to receive?" />
 
       <p className="text-gray-400 mb-6">
-        Select NFTs or tokens you want to request in return. NFTs below are fetched from the target wallet address.
+        Select NFTs or tokens you want to request in return.
       </p>
 
-  {/* TABS */}
-  <div className="flex gap-4 mb-8">
-    <button onClick={() => setTab("nft")} className={`px-4 py-2 rounded-lg text-sm ${tab === "nft" ? "bg-purple-600 text-white" : "bg-[#12172a] text-gray-300"}`}>
-      NFTs
-    </button>
+      {/* TABS */}
+      <div className="flex gap-4 mb-8">
+        <button
+          onClick={() => setTab("nft")}
+          className={`px-4 py-2 rounded-lg text-sm ${
+            tab === "nft"
+              ? "bg-purple-600 text-white"
+              : "bg-[#12172a] text-gray-300"
+          }`}
+        >
+          NFTs
+        </button>
 
-    <button onClick={() => setTab("token")} className={`px-4 py-2 rounded-lg text-sm ${tab === "token" ? "bg-purple-600 text-white" : "bg-[#12172a] text-gray-300"}`}>
-      Tokens
-    </button>
-  </div>
+        <button
+          onClick={() => setTab("token")}
+          className={`px-4 py-2 rounded-lg text-sm ${
+            tab === "token"
+              ? "bg-purple-600 text-white"
+              : "bg-[#12172a] text-gray-300"
+          }`}
+        >
+          Tokens
+        </button>
+      </div>
 
-  {/* NFT TAB */}
-  {tab === "nft" && (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-10">
-      {!targetWallet && (
-        <p className="text-yellow-300">Please set target wallet in Step 1 to load NFTs.</p>
-      )}
-      {targetNFTs.length === 0 && targetWallet && (
-        <p className="text-gray-400">No NFTs found in the target wallet.</p>
-      )}
+      {/* NFT TAB */}
+      {tab === "nft" && (
+        <div className="space-y-10 mb-10">
+          {/* Sem NFTs */}
+          {Object.keys(groupedNFTs).length === 0 && (
+            <p className="text-gray-400">
+              No NFTs found in this wallet. Only coins detected.
+            </p>
+          )}
 
-      {targetNFTs.map((nft) => {
-        const selected = selectedNFTIds.includes(nft.id);
+          {Object.keys(groupedNFTs).map((collection) => (
+            <div key={collection}>
+              <h2 className="text-xl font-semibold text-purple-300 mb-3">
+                {collection}
+              </h2>
 
-        return (
-          <div key={nft.id} onClick={() => toggleNFT(nft)} className={`flex flex-col items-start gap-2 p-4 rounded-xl cursor-pointer border ${selected ? "border-blue-400 bg-blue-400/10" : "border-white/10 bg-[#11172a]"}`}>
-            <img src={nft.image} className="w-24 h-24 rounded-lg mb-2" />
-            <div>
-              <p className="font-bold">{nft.name}</p>
-              <p className="text-sm text-gray-400">{nft.collection}</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {groupedNFTs[collection].map((nft: any) => {
+                  const selected = selectedNFTIds.includes(nft.id);
+
+                  return (
+                    <div
+                      key={nft.id}
+                      onClick={() => toggleNFT(nft)}
+                      className={`p-4 rounded-xl border cursor-pointer ${
+                        selected
+                          ? "border-blue-400 bg-blue-400/20"
+                          : "border-white/10 bg-[#11172a]"
+                      }`}
+                    >
+                      <img
+                        src={nft.image}
+                        className="w-full h-32 object-cover rounded-lg mb-3"
+                        onError={(e) => {
+                          e.currentTarget.src =
+                            "https://placehold.co/200x200?text=NFT";
+                        }}
+                      />
+                      <p className="font-bold">{nft.name}</p>
+                      <p className="text-sm text-gray-400">{collection}</p>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
+          ))}
+        </div>
+      )}
+
+      {/* TOKEN TAB */}
+      {tab === "token" && (
+        <div className="mb-10">
+          <div className="flex gap-4 mb-4">
+            <select
+              value={tokenType}
+              onChange={(e) => setTokenType(e.target.value)}
+              className="p-3 rounded-lg bg-[#101528] border border-gray-700 text-white"
+            >
+              <option value="SUI">SUI</option>
+              <option value="USDC">USDC</option>
+            </select>
+
+            <input
+              type="number"
+              placeholder="Amount"
+              value={tokenAmount}
+              onChange={(e) => setTokenAmount(e.target.value)}
+              className="p-3 rounded-lg bg-[#101528] border border-gray-700 text-white w-full"
+            />
+
+            <Button
+              onClick={addToken}
+              className="bg-purple-600 text-white px-4 py-2"
+            >
+              Add
+            </Button>
           </div>
-        );
-      })}
-    </div>
-  )}
+        </div>
+      )}
 
-  {/* TOKEN TAB */}
-  {tab === "token" && (
-    <div className="mb-10">
-      <div className="flex gap-4 mb-4">
-        <select value={tokenType} onChange={(e) => setTokenType(e.target.value)} className="p-3 rounded-lg bg-[#101528] border border-gray-700 text-white">
-          <option value="SUI">SUI</option>
-          <option value="USDC">USDC</option>
-        </select>
-
-        <input type="number" placeholder="Amount" value={tokenAmount} onChange={(e) => setTokenAmount(e.target.value)} className="p-3 rounded-lg bg-[#101528] border border-gray-700 text-white w-full" />
-
-        <Button onClick={addToken} className="bg-purple-600 text-white px-4 py-2">Add</Button>
+      {/* NEXT BUTTON */}
+      <div className="flex justify-end mt-10">
+        <Button
+          onClick={() => router.push("/trade/create/step4")}
+          className="bg-gradient-to-r from-blue-500 to-purple-500 text-white px-6 py-2 rounded-lg"
+        >
+          Next Step →
+        </Button>
       </div>
     </div>
-  )}
-
-  {/* NEXT BUTTON */}
-  <div className="flex justify-end mt-10">
-    <Button onClick={() => router.push("/trade/create/step4")} className="bg-gradient-to-r from-blue-500 to-purple-500 text-white px-6 py-2 rounded-lg">Next Step →</Button>
-  </div>
-</div>
   );
 }
